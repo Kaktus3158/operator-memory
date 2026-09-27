@@ -1,0 +1,12 @@
+{
+  "name": "operator-local",
+  "plugins": [
+    {
+      "name": "aerovato",
+      "source": "./packages/codex",
+      "policy": {
+        "installation": "AVAILABLE"
+      }
+    }
+  ]
+}
