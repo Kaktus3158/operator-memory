@@ -2,6 +2,8 @@
   <img src="docs/assets/banner.jpeg" alt="Operator Memory, the self-improving context engine for coding agents">
 </p>
 
+**English** | [简体中文](README.zh-CN.md)
+
 # Operator Memory
 
 ### The self-improving context engine for coding agents.
@@ -31,6 +33,10 @@ Every session runs the same loop:
 1. **Consult** — the agent starts from your Brain: instructions, codebase index, specs, guides.
 2. **Build** — the agent does normal development work, informed by that knowledge.
 3. **Update** — the agent records what changed: new specs, decisions, standards, lessons.
+
+<p>
+  <img src="docs/assets/change-the-loop.png" alt="The memory-aware agentic loop: consult the brain, build, update the brain">
+</p>
 
 When project truth changes, the agent updates the canonical file instead of adding a RAG database record. For more details, see [Architecture](docs/architecture.md).
 
