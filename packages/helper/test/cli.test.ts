@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { NodeFileSystem, NodePath } from "@effect/platform-node";
+import { NodeChildProcessSpawner, NodeFileSystem, NodePath } from "@effect/platform-node";
 import { Effect, Layer } from "effect";
 import { afterEach, beforeEach, expect, test } from "vitest";
 
@@ -11,6 +11,7 @@ import { renderPreamble } from "@aerovato/operator-core/preamble";
 
 import { runCli } from "../src/cli.ts";
 import { GitError } from "../src/git.ts";
+import { NpmRegistry } from "../src/npm-registry.ts";
 import { readTemplate, TemplatePath } from "../src/templates.ts";
 import type { CliContext, CliResult } from "../src/utils.ts";
 import { makeGitRunnerLayer } from "./mocks/git-runner.ts";
@@ -27,7 +28,15 @@ const gitLayer = makeGitRunnerLayer(arguments_ => {
   }
   return Effect.succeed(tracked.join("\n"));
 });
-const services = Layer.mergeAll(NodeFileSystem.layer, NodePath.layer, gitLayer);
+const child = NodeChildProcessSpawner.layer.pipe(
+  Layer.provide(NodeFileSystem.layer),
+  Layer.provide(NodePath.layer),
+);
+const registry = Layer.succeed(
+  NpmRegistry.Service,
+  NpmRegistry.Service.of({ latestVersion: () => Effect.succeed("1.2.3") }),
+);
+const services = Layer.mergeAll(NodeFileSystem.layer, NodePath.layer, child, gitLayer, registry);
 
 beforeEach(() => {
   directory = fs.mkdtempSync(join(tmpdir(), "operator-helper-cli-"));
@@ -47,18 +56,18 @@ afterEach(() => {
 
 test("routes help, version, and invalid commands", async () => {
   const help = await executeCli(["help"], context);
-  expect(help.output).toContain("operator-helper user status     Show User Partition status");
-  expect(help.output).toContain("operator-helper project init    Initialize project partitions");
-  expect(help.output).toContain("operator-helper index status    Show Private and Shared main");
-  expect(help.output).toContain("operator-helper index lint      Check Project Index structure");
-  expect(help.output).toContain("operator-helper memory check    Check that all Operator memory");
-  expect(help.output).toContain("operator-helper preamble        Render the Operator preamble");
-  expect(help.output).toContain("operator-helper install codex");
-  expect(help.output).toContain("operator-helper install code-puppy");
-  expect(help.output).toContain("operator-helper install pi");
-  expect(help.output).not.toContain("operator-helper upgrade");
+  expect(help.output).toMatch(/^user status\s+Show User Partition status$/m);
+  expect(help.output).toMatch(/^project init\s+Initialize project partitions and print/m);
+  expect(help.output).toMatch(/^index init\s+Show Project Index status and print/m);
+  expect(help.output).not.toMatch(/^index status\s/m);
+  expect(help.output).not.toMatch(/^user guide\s/m);
+  expect(help.output).toMatch(/^index lint\s+Check Project Index structure/m);
+  expect(help.output).toMatch(/^memory check\s+Check that all Operator memory/m);
+  expect(help.output).toMatch(/^preamble\s+Render the Operator preamble/m);
+  expect(help.output).toMatch(/^install codex\s+Install or update the Codex plugin/m);
+  expect(help.output).toMatch(/^install code-puppy\s+Install or update the Code Puppy plugin/m);
+  expect(help.output).toMatch(/^install pi\s+Install or update the Pi plugin/m);
   expect(help.output).not.toContain("templates index");
-  expect((await executeCli(["version"], context)).output).toBe("1.2.3");
   expect((await executeCli(["--help"], context)).exitCode).toBe(2);
   expect((await executeCli(["-h"], context)).exitCode).toBe(2);
   expect((await executeCli(["--version"], context)).exitCode).toBe(2);
@@ -70,7 +79,7 @@ test("formats help as plaintext", async () => {
   const help = (await executeCli(["help"], context)).output;
   expect(help).toContain("Operator Helper");
   expect(help).toContain("COMMANDS\n\n");
-  expect(help).toContain("operator-helper user status     Show User Partition status");
+  expect(help).toMatch(/^user status\s+Show User Partition status$/m);
   expect(help).not.toContain("FLAGS");
   expect(help).not.toContain("\u001B");
 });
@@ -81,11 +90,10 @@ test("reports, initializes, preserves, and guides the user partition", async () 
 
   const initialized = await executeCli(["user", "init"], context);
   expect(initialized.exitCode).toBe(0);
-  expect(initialized.output).toBe(
-    "✓ User Partition Initialized\n"
-      + "Created  ~/.operator/user/operator.md\n"
-      + "Created  ~/.operator/user/catalog.md",
+  expect(initialized.output).toContain(
+    "✓ User Partition Initialized\nCreated  ~/.operator/user/operator.md\nCreated  ~/.operator/user/catalog.md",
   );
+  expect(initialized.output).toContain("# User Setup");
   expect(fs.readFileSync(resolvePath("/home/.operator/user/operator.md"), "utf8")).toBe(
     readTemplate(TemplatePath.UserOperator),
   );
@@ -115,9 +123,7 @@ test("reports, initializes, preserves, and guides the user partition", async () 
   expect(incomplete.output).toContain("Missing (~/.operator/user/catalog.md)");
   expect(incomplete.output).toContain("/operator:user-init");
 
-  expect((await executeCli(["user", "guide"], context)).output).toBe(
-    `Follow the agent instructions below to complete User Setup.\n\n${readTemplate(TemplatePath.UserSetup)}`,
-  );
+  expect(await executeCli(["user", "guide"], context)).toEqual({ exitCode: 0, output: "" });
 });
 
 test("reports a user instruction path obstruction", async () => {
@@ -125,6 +131,15 @@ test("reports a user instruction path obstruction", async () => {
   const result = await executeCli(["user", "status"], context);
   expect(result.exitCode).toBe(1);
   expect(result.output).toContain("Expected a file, found directory");
+});
+
+test("prints the user setup guide when initialization cannot create its root", async () => {
+  seed({ "/home/.operator": "blocked" });
+
+  const result = await executeCli(["user", "init"], context);
+  expect(result.exitCode).toBe(1);
+  expect(result.output).toContain("Expected a directory, found file");
+  expect(result.output).toContain("# User Setup");
 });
 
 test.runIf(process.platform !== "win32")("restricts an existing user Operator root", async () => {
@@ -141,6 +156,7 @@ test("initializes Private content without creating the Shared partition", async 
   expect(result.exitCode).toBe(0);
   expect(result.output).toContain("Created  .operator/index/index.md");
   expect(result.output).toContain("Project Shared Not Initialized");
+  expect(result.output).toContain("# Project Setup");
   expect(fs.readFileSync(resolvePath("/project/.operator/operator.md"), "utf8")).toBe(
     readTemplate(TemplatePath.ProjectOperator),
   );
@@ -199,12 +215,22 @@ test("reports detailed project file write failures and continues", async () => {
   expect(result.output).toContain("Failed");
   expect(result.output).toContain(".operator/operator.md");
   expect(result.output).toContain("Expected a file, found directory");
+  expect(result.output).toContain("# Project Setup");
   expect(fs.readFileSync(resolvePath("/project/.operator/catalog.md"), "utf8")).toBe(
     readTemplate(TemplatePath.ProjectCatalog),
   );
   expect(fs.readFileSync(resolvePath("/project/.operator/index/index.md"), "utf8")).toBe(
     readTemplate(TemplatePath.ProjectIndex),
   );
+});
+
+test("prints the project setup guide when global ignore setup fails", async () => {
+  seed({ "/home/.config": "blocked" });
+
+  const result = await executeCli(["project", "init"], context);
+  expect(result.exitCode).toBe(1);
+  expect(result.output).toContain(resolvePath("/home/.config/git/ignore"));
+  expect(result.output).toContain("# Project Setup");
 });
 
 test("uses a configured global ignore and appends the exact pattern", async () => {
@@ -248,13 +274,25 @@ test("renders main index status without listing subindexes", async () => {
   expect(result.output).not.toContain("Description:");
   expect(result.output).not.toContain("Read If:");
   expect(result.output).not.toContain("nested/api.md");
+  expect(result.output).toContain("# Project Index Setup");
+  expect(await executeCli(["index", "init"], context)).toEqual(result);
 });
 
 test("reports a missing Project Brain without creating files", async () => {
   const result = await executeCli(["index", "status"], context);
   expect(result.exitCode).toBe(0);
   expect(result.output).toContain("Project Brain Missing");
+  expect(result.output).toContain("# Project Index Setup");
   expect(fs.existsSync(resolvePath("/project/.operator"))).toBe(false);
+});
+
+test("prints the index setup guide when main index inspection fails", async () => {
+  fs.mkdirSync(resolvePath("/project/.operator/index/index.md"), { recursive: true });
+
+  const result = await executeCli(["index", "init"], context);
+  expect(result.exitCode).toBe(1);
+  expect(result.output).toContain("Expected a file, found directory");
+  expect(result.output).toContain("# Project Index Setup");
 });
 
 test("checks full memory loading and reports partition errors independently", async () => {
@@ -341,12 +379,10 @@ test("returns success for lint warnings without errors", async () => {
   expect(result.output).toContain("⚠ .operator/index/notes.txt");
 });
 
-test("prints project and index guides", async () => {
-  const projectGuide = (await executeCli(["project", "guide"], context)).output;
-  expect(projectGuide).toContain("# Project Setup");
-  expect(projectGuide).toContain(readTemplate(TemplatePath.ProjectSharedReadme).trimEnd());
-  expect(projectGuide).not.toContain("~/.operator/templates");
-  expect((await executeCli(["index", "guide"], context)).output).toContain("# Project Index Setup");
+test("retired guide commands succeed without output or side effects", async () => {
+  for (const area of ["user", "project", "index"]) {
+    expect(await executeCli([area, "guide"], context)).toEqual({ exitCode: 0, output: "" });
+  }
   expect(fs.existsSync(resolvePath("/home/.operator"))).toBe(false);
 });
 

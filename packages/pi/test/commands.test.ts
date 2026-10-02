@@ -5,81 +5,37 @@ import { OPERATOR_COMMAND_NAMES, registerCommands } from "../src/commands.ts";
 
 type CommandHandler = (
   arguments_: string,
-  context: { readonly cwd: string; readonly waitForIdle: () => Promise<void> },
+  context: { readonly waitForIdle: () => Promise<void> },
 ) => Promise<void>;
 
-const operationArguments = {
-  "operator:user-init": ["user init", "user guide"],
-  "operator:project-init": ["project init", "project guide"],
-  "operator:index": ["index status", "index guide"],
-  "operator:repair": ["memory check"],
-} as const;
+test.each([
+  ["operator:user-init", "user init", "User Setup"],
+  ["operator:project-init", "project init", "Project Setup"],
+  ["operator:index", "index init", "Project Index Setup"],
+  ["operator:repair", "memory check", "reported load failures"],
+] as const)("hands %s to the agent without executing Helper", async (name, operation, guide) => {
+  const commands = new Map<string, CommandHandler>();
+  const sendUserMessage = vi.fn();
+  registerCommands({
+    registerCommand: (id: string, definition: { readonly handler: CommandHandler }) =>
+      commands.set(id, definition.handler),
+    sendUserMessage,
+  } as unknown as ExtensionAPI);
+  const waitForIdle = vi.fn().mockResolvedValue(undefined);
 
-test.each(OPERATOR_COMMAND_NAMES)("runs %s Helper operations in order", async name => {
-  const extension = createExtension();
-  extension.exec.mockResolvedValue({ stdout: "output", stderr: "", code: 0, killed: false });
+  await commands.get(name)?.("", { waitForIdle });
 
-  await extension.commands.get(name)?.("", extension.context);
-
-  expect(extension.context.waitForIdle).toHaveBeenCalledOnce();
-  expect(extension.exec.mock.calls.map(([, arguments_]) => arguments_.join(" "))).toEqual([
-    "version",
-    ...operationArguments[name],
-  ]);
-  expect(extension.sendUserMessage).toHaveBeenCalledWith(expect.any(String), {
+  expect(waitForIdle).toHaveBeenCalledOnce();
+  expect(sendUserMessage).toHaveBeenCalledWith(expect.any(String), {
     expandPromptTemplates: false,
   });
-});
-
-test("frames stdout, stderr, and exit code without a shell", async () => {
-  const extension = createExtension();
-  extension.exec
-    .mockResolvedValueOnce({ stdout: "version", stderr: "", code: 0, killed: false })
-    .mockResolvedValueOnce({ stdout: "created\n", stderr: "warning\n", code: 1, killed: false })
-    .mockResolvedValueOnce({ stdout: "guide", stderr: "", code: 0, killed: false });
-
-  await extension.commands.get("operator:user-init")?.("", extension.context);
-
-  expect(extension.exec).toHaveBeenNthCalledWith(2, "operator-helper", ["user", "init"], {
-    cwd: "/project",
-  });
-  const prompt = extension.sendUserMessage.mock.calls[0]?.[0];
-  expect(prompt).toContain(
-    [
-      "<operator-command>",
-      "<command>operator-helper user init</command>",
-      "<output>",
-      "<stdout>",
-      "created",
-      "</stdout>",
-      "<stderr>",
-      "warning",
-      "</stderr>",
-      "<code>1</code>",
-      "</output>",
-      "</operator-command>",
-    ].join("\n"),
-  );
-  expect(prompt).toContain("<command>operator-helper user guide</command>");
-  expect(prompt).toContain("<operator-instructions>");
-});
-
-test("reports Helper unavailability and skips normal operations", async () => {
-  const extension = createExtension();
-  extension.exec.mockResolvedValue({
-    stdout: "",
-    stderr: "operator-helper not found",
-    code: 127,
-    killed: false,
-  });
-
-  await extension.commands.get("operator:index")?.("", extension.context);
-
-  expect(extension.exec).toHaveBeenCalledOnce();
-  expect(extension.sendUserMessage).toHaveBeenCalledWith(
-    expect.stringContaining("ask the user to rerun `/operator:index`"),
-    { expandPromptTemplates: false },
-  );
+  const text = sendUserMessage.mock.calls[0]?.[0] as string;
+  expect(text).toContain("1. Run `operator-helper version`");
+  expect(text).toContain("run `operator-helper upgrade` before continuing");
+  expect(text).toContain(`2. Run \`operator-helper ${operation}\``);
+  expect(text).toContain(guide);
+  expect(text).toContain("repair its installation and retry the failed command");
+  expect(text).not.toContain("<operator-command>");
 });
 
 test("registers exact names and leaves duplicate renaming to Pi", () => {
@@ -92,7 +48,6 @@ test("registers exact names and leaves duplicate renaming to Pi", () => {
       names.push(registeredName);
     },
   } as unknown as ExtensionAPI;
-
   registerCommands(pi);
 
   expect(names).toEqual([
@@ -101,22 +56,5 @@ test("registers exact names and leaves duplicate renaming to Pi", () => {
     "operator:index:1",
     "operator:repair",
   ]);
+  expect(OPERATOR_COMMAND_NAMES).toHaveLength(4);
 });
-
-function createExtension() {
-  const commands = new Map<string, CommandHandler>();
-  const exec = vi.fn();
-  const sendUserMessage = vi.fn();
-  registerCommands({
-    registerCommand: (name: string, definition: { readonly handler: CommandHandler }) =>
-      commands.set(name, definition.handler),
-    exec,
-    sendUserMessage,
-  } as unknown as ExtensionAPI);
-  return {
-    commands,
-    context: { cwd: "/project", waitForIdle: vi.fn().mockResolvedValue(undefined) },
-    exec,
-    sendUserMessage,
-  };
-}

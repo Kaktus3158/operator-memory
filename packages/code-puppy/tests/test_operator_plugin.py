@@ -407,42 +407,42 @@ async def test_session_end_awaits_cancelled_render(
     assert plugin._render_tasks == {}
 
 
+@pytest.mark.parametrize(
+    ("name", "arguments"),
+    [
+        ("operator:user-init", ("user", "init")),
+        ("operator:project-init", ("project", "init")),
+        ("operator:index", ("index", "init")),
+        ("operator:repair", ("memory", "check")),
+    ],
+)
 def test_commands_return_agent_input_and_preserve_unknown_commands(
-    plugin: Any, monkeypatch: pytest.MonkeyPatch
+    plugin: Any,
+    name: str,
+    arguments: tuple[str, ...],
 ):
-    calls: list[tuple[str, ...]] = []
-
-    def run(arguments: tuple[str, ...]) -> tuple[int, str]:
-        calls.append(arguments)
-        return 0, "output"
-
-    monkeypatch.setattr(plugin, "_run_helper", run)
-    result = plugin._custom_command("/operator:user-init", "operator:user-init")
+    result = plugin._custom_command(f"/{name}", name)
 
     assert result.__class__.__name__ == "CustomCommandResult"
-    assert "<command>operator-helper user init 2>&1</command>" in result.content
-    assert "<command>operator-helper user guide 2>&1</command>" in result.content
-    assert "<operator-instructions>" in result.content
-    assert calls == [("version",), ("user", "init"), ("user", "guide")]
+    assert "1. Run `operator-helper version`" in result.content
+    assert "run `operator-helper upgrade` before continuing" in result.content
+    assert f"2. Run `operator-helper {' '.join(arguments)}`" in result.content
+    assert "repair its installation and retry the failed command" in result.content
+    assert "<operator-command>" not in result.content
     assert plugin._custom_command("/unknown", "unknown") is None
 
 
-def test_command_helper_failure_skips_operations(
-    plugin: Any, monkeypatch: pytest.MonkeyPatch
-):
-    calls: list[tuple[str, ...]] = []
+def test_project_command_follows_guide_on_failure(plugin: Any):
+    result = plugin._custom_command("/operator:project-init", "operator:project-init")
+    assert "Follow the Project Setup guide" in result.content
+    assert "including when initialization reports failures" in result.content
 
-    def run(arguments: tuple[str, ...]) -> tuple[int, str]:
-        calls.append(arguments)
-        return 1, "not found"
 
-    monkeypatch.setattr(plugin, "_run_helper", run)
-    result = plugin._custom_command("/operator:index", "operator:index")
-
-    assert "<operator-diagnostic>" in result.content
-    assert "operator-helper version 2>&1" in result.content
-    assert "operator-helper index status" not in result.content
-    assert calls == [("version",)]
+def test_repair_command_only_fixes_reported_failures(plugin: Any):
+    result = plugin._custom_command("/operator:repair", "operator:repair")
+    assert "If no issues are detected, stop" in result.content
+    assert "repair only the reported load failures" in result.content
+    assert "read the applicable Operator memory documents" in result.content
 
 
 def test_command_help_lists_canonical_commands(plugin: Any) -> None:

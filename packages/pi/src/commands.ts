@@ -7,102 +7,57 @@ export const OPERATOR_COMMAND_NAMES = [
   "operator:repair",
 ] as const;
 
-type OperatorCommandName = (typeof OPERATOR_COMMAND_NAMES)[number];
-type HelperResult = Awaited<ReturnType<ExtensionAPI["exec"]>>;
-
 const commands = {
   "operator:user-init": {
     description: "Initialize Operator User Instructions",
-    operations: [
-      ["user", "init"],
-      ["user", "guide"],
-    ],
-    instructions: "Follow the instructions in the guide output above.",
+    operation: "user init",
+    guide:
+      "Follow the User Setup guide in its output, including when initialization reports failures.",
   },
   "operator:project-init": {
     description: "Initialize Operator Project",
-    operations: [
-      ["project", "init"],
-      ["project", "guide"],
-    ],
-    instructions: "Follow the instructions in the guide output above.",
+    operation: "project init",
+    guide:
+      "Follow the Project Setup guide in its output, including when initialization reports failures.",
   },
   "operator:index": {
     description: "Build or refresh the Operator Project Index",
-    operations: [
-      ["index", "status"],
-      ["index", "guide"],
-    ],
-    instructions: "Follow the instructions in the guide output above.",
+    operation: "index init",
+    guide:
+      "Follow the Project Index Setup guide in its output, including when inspection reports failures.",
   },
   "operator:repair": {
     description: "Repair Operator",
-    operations: [["memory", "check"]],
-    instructions:
-      "If the output says `No issues detected.`, no action is needed and you may stop. Otherwise, repair only the reported Operator memory issues; do not initialize uninitialized partitions. Rerun `operator-helper memory check` until it succeeds, then read the applicable Operator memory before continuing.",
+    operation: "memory check",
+    guide:
+      "If no issues are detected, stop. Otherwise, repair only the reported load failures without initializing absent partitions. Rerun `operator-helper memory check` to confirm the repair, then read the applicable Operator memory documents.",
   },
 } as const;
 
 export function registerCommands(pi: ExtensionAPI): void {
   for (const name of OPERATOR_COMMAND_NAMES) {
+    const command = commands[name];
     pi.registerCommand(name, {
-      description: commands[name].description,
+      description: command.description,
       handler: async (_arguments, context) => {
         await context.waitForIdle();
-        const version = await pi.exec("operator-helper", ["version"], { cwd: context.cwd });
-        const prompt =
-          version.code === 0
-            ? await operationPrompt(pi, name, context.cwd)
-            : unavailablePrompt(name, version);
-        pi.sendUserMessage(prompt, { expandPromptTemplates: false });
+        pi.sendUserMessage(
+          `# ${command.description}
+
+1. Run \`operator-helper version\`. If an update is available, run \`operator-helper upgrade\` before continuing.
+2. Run \`operator-helper ${command.operation}\`. ${command.guide}
+
+## Recovery
+
+- If Helper cannot start, repair its installation and retry the failed command.
+- If the version check or upgrade fails, diagnose the error and retry.
+- If \`operator-helper ${command.operation}\` reports a failure, use its output to resolve it and rerun it as needed.
+- If you cannot resolve a problem, report the blocker.
+
+Use Helper output as working context. Do not reproduce it wholesale or reimplement Helper logic.`,
+          { expandPromptTemplates: false },
+        );
       },
     });
   }
-}
-
-async function operationPrompt(
-  pi: ExtensionAPI,
-  name: OperatorCommandName,
-  cwd: string,
-): Promise<string> {
-  const outputs: string[] = [];
-  for (const arguments_ of commands[name].operations) {
-    outputs.push(
-      wrapCommand(arguments_, await pi.exec("operator-helper", [...arguments_], { cwd })),
-    );
-  }
-  return [
-    outputs.join("\n\n"),
-    "",
-    "<operator-instructions>",
-    commands[name].instructions,
-    "</operator-instructions>",
-  ].join("\n");
-}
-
-function unavailablePrompt(name: OperatorCommandName, result: HelperResult): string {
-  return [
-    wrapCommand(["version"], result),
-    "",
-    "<operator-diagnostic>",
-    `Operator Helper is unavailable. Help the user repair the missing operator-helper command (npm: @aerovato/operator-helper). Validate the repair by rerunning \`operator-helper version\`. Once it succeeds, ask the user to rerun \`/${name}\`.`,
-    "</operator-diagnostic>",
-  ].join("\n");
-}
-
-function wrapCommand(arguments_: ReadonlyArray<string>, result: HelperResult): string {
-  return [
-    "<operator-command>",
-    `<command>operator-helper ${arguments_.join(" ")}</command>`,
-    "<output>",
-    "<stdout>",
-    result.stdout.trim(),
-    "</stdout>",
-    "<stderr>",
-    result.stderr.trim(),
-    "</stderr>",
-    `<code>${result.code}</code>`,
-    "</output>",
-    "</operator-command>",
-  ].join("\n");
 }
