@@ -102,7 +102,7 @@
     },
     "packages/opencode-v2": {
       "name": "@aerovato/operator-opencode-v2",
-      "version": "2.2.0",
+      "version": "2.2.1",
       "devDependencies": {
         "@aerovato/operator-core": "workspace:*",
         "@opencode/plugin": "2.0.14",
